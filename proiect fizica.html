@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Simulare Plan Înclinat</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+      line-height: 1.6;
+      position: relative;
+    }
+    /* Panoul de control inițial cu tranziție */
+    #controls {
+      margin-bottom: 20px;
+      transition: opacity 0.5s ease;
+    }
+    #controls.fade-out {
+      opacity: 0;
+      pointer-events: none;
+    }
+    #simulation {
+      margin-top: 20px;
+      border: 1px solid #ccc;
+      position: relative;
+    }
+    canvas {
+      background: #f9f9f9;
+      display: block;
+      margin: 0 auto;
+    }
+    /* Overlay-ul pentru afișarea datelor */
+    #infoOverlay {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      background: rgba(255, 255, 255, 0.95);
+      border: 1px solid #ccc;
+      padding: 10px;
+      border-radius: 5px;
+      font-size: 14px;
+      transition: opacity 0.5s ease;
+    }
+    /* Rezultatele finale afișate în centrul canvasului */
+    #finalResults {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(255, 255, 255, 0.97);
+      border: 2px solid #333;
+      padding: 20px;
+      border-radius: 10px;
+      text-align: center;
+      opacity: 0;
+      transition: opacity 1s ease;
+      pointer-events: none;
+    }
+    #finalResults.visible {
+      opacity: 1;
+      pointer-events: all;
+    }
+    #resetButton {
+      padding: 10px 20px;
+      margin-top: 10px;
+      cursor: pointer;
+    }
+    label {
+      display: block;
+      margin-bottom: 10px;
+    }
+  </style>
+</head>
+<body>
+  <!-- Panoul de control inițial -->
+  <div id="controls">
+    <h1>Simulare Plan Înclinat</h1>
+    <label>Unghiul planului (°):
+      <input type="number" id="angle" value="30" min="0" max="90" />
+    </label>
+    <label>Masa corpului (kg):
+      <input type="number" id="mass" value="10" min="0.1" />
+    </label>
+    <label>Coeficientul de frecare:
+      <input type="number" id="friction" value="0.05" min="0" step="0.01" />
+    </label>
+    <label>Forța aplicată (N):
+      <input type="number" id="force" value="100" />
+    </label>
+    <label>Timpul forței (s):
+      <input type="number" id="forceTime" value="1" min="0" step="0.1" />
+    </label>
+    <label>Accelerația gravitațională (m/s²):
+      <input type="number" id="gravity" value="10" />
+    </label>
+    <label>Unghiul forței (°):
+      <input type="number" id="forceAngle" value="0" />
+    </label>
+    <!-- Noi: dimensiuni rampă -->
+    <label>Lungime rampă (m):
+      <input type="number" id="rampLength" value="10" min="1" step="0.1" />
+    </label>
+    <label>Înălțime rampă (m):
+      <input type="number" id="rampHeight" value="5" min="0.1" step="0.1" />
+    </label>
+    <button onclick="startSimulation()">Pornește simularea</button>
+  </div>
+
+  <!-- Zona de simulare: canvas mărit, overlay și container pentru rezultate -->
+  <div id="simulation">
+    <canvas id="canvas" width="1000" height="600"></canvas>
+    <div id="infoOverlay">
+      <div id="timeDisplay">Timp: 0.00 s</div>
+      <div id="velocityDisplay">Viteza: 0.00 m/s</div>
+      <div id="accelerationDisplay">Accelerație: 0.00 m/s²</div>
+    </div>
+    <div id="finalResults">
+      <h2>Rezultate Finale</h2>
+      <p>Accelerație finală: <span id="finalAcc"></span> m/s²</p>
+      <p>Viteza finală: <span id="finalVel"></span> m/s</p>
+      <p>Timpul total: <span id="finalTime"></span> s</p>
+      <p>Distanta parcursa: <span id="distance"></span> m</p>
+      <button id="resetButton" onclick="resetSimulation()">Reset</button>
+    </div>
+  </div>
+
+  <script>
+    let simInterval;
+    
+    function startSimulation() {
+      // Ascundem panoul de control cu tranziție
+      document.getElementById('controls').classList.add('fade-out');
+
+      // Preluăm principalele valori din input
+      const mass = parseFloat(document.getElementById('mass').value);
+      const frictionCoefficient = parseFloat(document.getElementById('friction').value);
+      const force = parseFloat(document.getElementById('force').value);
+      const forceTime = parseFloat(document.getElementById('forceTime').value);
+      const gravity = parseFloat(document.getElementById('gravity').value);
+      const forceAngleDeg = parseFloat(document.getElementById('forceAngle').value);
+      
+      // Noi: preluăm dimensiunile rampă controlate de utilizator
+      const rampLengthInput = parseFloat(document.getElementById('rampLength').value);
+      const rampHeightInput = parseFloat(document.getElementById('rampHeight').value);
+      
+      // Calculăm geometria rampă: lungime fizică și unghi
+      const L_phys = Math.sqrt(rampLengthInput**2 + rampHeightInput**2);
+      const theta = Math.atan(rampHeightInput / rampLengthInput);
+      
+      // Setări de desen (fixe)
+      const scale = 30;           // pixeli pe metru
+      const baseX = 100;          // punctul de start pe canvas (pe rampă)
+      const baseY = 500;          // baza rampii (se consideră și ca "podea")
+      const groundLevel = baseY;  // linia de referință (podea)
+      // Calculăm capătul rampii pe baza inputului utilizator
+      const rampEndX = baseX + rampLengthInput * scale;
+      const rampEndY = baseY - rampHeightInput * scale;
+      
+      // Calcule pentru forțe
+      const F_applied_const = force * Math.cos(forceAngleDeg * Math.PI/180 - theta);
+      const F_gravity = - mass * gravity * Math.sin(theta);
+      const frictionMax = frictionCoefficient * mass * gravity * Math.cos(theta);
+      
+      // Domeniul de deplasare pe rampă:
+      let initialNet = F_applied_const + F_gravity;
+      let s = (initialNet >= 0) ? 0 : L_phys;
+      
+      // Inițializăm viteza și timpul
+      let v = 0;
+      let t = 0;
+      const dt = 0.02;
+      
+      // Variabile pentru freefall (lucrând în coordonate de scenă, în pixeli)
+      let freefallX, freefallY, freefall_vx, freefall_vy;
+      
+      // Variabila de stare: "ramp" sau "freefall"
+      let simulationPhase = "ramp";
+      
+      // Variabile pentru transformarea camerei (tracking & zoom)
+      let viewScale = 1;      // valoarea inițială (zoom normal)
+      let viewOffsetX = 0;
+      let viewOffsetY = 0;
+      
+      // Resetează rezultatele din rulări anterioare
+      document.getElementById('finalResults').classList.remove('visible');
+      
+      // Obținem contextul canvasului
+      const canvas = document.getElementById('canvas');
+      const ctx = canvas.getContext('2d');
+      
+      // Desenăm un fundal verde "infinit"
+      function fillGround() {
+        ctx.fillStyle = "#cfc";
+        ctx.fillRect(-10000, groundLevel, 20000, canvas.height - groundLevel + 10000);
+      }
+      
+      function drawRamp() {
+        ctx.fillStyle = "#ccc";
+        ctx.beginPath();
+        ctx.moveTo(baseX, baseY);
+        ctx.lineTo(rampEndX, rampEndY);
+        ctx.lineTo(rampEndX, baseY);
+        ctx.closePath();
+        ctx.fill();
+      }
+      
+      function drawBlockOnRamp(sVal) {
+        const x = baseX + sVal * Math.cos(theta) * scale;
+        const y = baseY - sVal * Math.sin(theta) * scale;
+        ctx.fillStyle = "blue";
+        ctx.beginPath();
+        ctx.arc(x, y, 10, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      
+      function drawBlockFreefall(x, y) {
+        ctx.fillStyle = "blue";
+        ctx.beginPath();
+        ctx.arc(x, y, 10, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      
+      function drawForceArrow(x, y) {
+        const arrowLength = 40;
+        const endX = x + arrowLength * Math.cos(forceAngleDeg * Math.PI/180);
+        const endY = y - arrowLength * Math.sin(forceAngleDeg * Math.PI/180);
+        ctx.strokeStyle = "red";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(endX, endY);
+        ctx.stroke();
+        const headlen = 8;
+        const angleArrow = Math.atan2(y - endY, endX - x);
+        ctx.beginPath();
+        ctx.moveTo(endX, endY);
+        ctx.lineTo(endX - headlen * Math.cos(angleArrow - Math.PI/6), endY + headlen * Math.sin(angleArrow - Math.PI/6));
+        ctx.lineTo(endX - headlen * Math.cos(angleArrow + Math.PI/6), endY + headlen * Math.sin(angleArrow + Math.PI/6));
+        ctx.lineTo(endX, endY);
+        ctx.fillStyle = "red";
+        ctx.fill();
+      }
+      
+      function updateOverlay(aVal, vVal, tVal) {
+        document.getElementById('timeDisplay').innerText = "Timp: " + tVal.toFixed(2) + " s";
+        document.getElementById('velocityDisplay').innerText = "Viteza: " + vVal.toFixed(2) + " m/s";
+        document.getElementById('accelerationDisplay').innerText = "Accelerație: " + aVal.toFixed(2) + " m/s²";
+      }
+      
+      // Funcție utilitară de interpolare
+      function lerp(start, end, amt) {
+        return start + (end - start) * amt;
+      }
+      
+      simInterval = setInterval(function() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.save();
+        ctx.scale(viewScale, viewScale);
+        ctx.translate(viewOffsetX, viewOffsetY);
+        
+        fillGround();
+        drawRamp();
+        
+        if (simulationPhase === "ramp") {
+          const F_applied_current = (t < forceTime) ? F_applied_const : 0;
+          const netExternal = F_applied_current + F_gravity;
+          let a = 0;
+          if (Math.abs(v) < 1e-6) {
+            if (t < forceTime) {
+              if (Math.abs(netExternal) < frictionMax) {
+                a = 0;
+                v = 0;
+              } else {
+                a = (netExternal - frictionMax * Math.sign(netExternal)) / mass;
+              }
+            } else {
+              if (s < L_phys) {
+                v = -0.1;
+              }
+              a = (netExternal - frictionMax * Math.sign(v)) / mass;
+            }
+          } else {
+            a = (netExternal - frictionMax * Math.sign(v)) / mass;
+          }
+          
+          v = v + a * dt;
+          s = s + v * dt;
+          t += dt;
+          
+          if (s >= L_phys) {
+            if (v > 0) {
+              simulationPhase = "freefall";
+              s = L_phys;
+              let blockX = baseX + s * Math.cos(theta) * scale;
+              let blockY = baseY - s * Math.sin(theta) * scale;
+              freefallX = blockX;
+              freefallY = blockY;
+              freefall_vx = v * Math.cos(theta);
+              freefall_vy = -v * Math.sin(theta);
+            } else {
+              s = L_phys;
+            }
+          }
+          
+          drawBlockOnRamp(s);
+          if (t < forceTime) {
+            let blockX = baseX + s * Math.cos(theta) * scale;
+            let blockY = baseY - s * Math.sin(theta) * scale;
+            drawForceArrow(blockX, blockY);
+          }
+          
+          updateOverlay(a, v, t);
+          
+          if (t >= forceTime && s <= 0) {
+            s = 0;
+            v = 0;
+            clearInterval(simInterval);
+            document.getElementById('finalAcc').innerText = "0.000";
+            document.getElementById('finalVel').innerText = "0.000";
+            document.getElementById('finalTime').innerText = t.toFixed(3);
+            document.getElementById('distance').innerText = "0.000";
+            document.getElementById('finalResults').classList.add('visible');
+          }
+        } else if (simulationPhase === "freefall") {
+          freefall_vy += gravity * dt;
+          freefallX += freefall_vx * dt * scale;
+          freefallY += freefall_vy * dt * scale;
+          t += dt;
+          
+          let speed = Math.sqrt(freefall_vx**2 + freefall_vy**2);
+          updateOverlay(gravity, speed, t);
+          drawBlockFreefall(freefallX, freefallY);
+          
+          // Actualizare cameră: calculăm bounding-box-ul pentru rampa și poziția corpului
+          {
+            let minX = Math.min(baseX, rampEndX, freefallX);
+            let maxX = Math.max(baseX, rampEndX, freefallX);
+            let minY = Math.min(baseY, rampEndY, freefallY);
+            let maxY = Math.max(baseY, rampEndY, freefallY);
+            const margin = 50;
+            minX -= margin; maxX += margin; minY -= margin; maxY += margin;
+            let desiredScaleX = canvas.width / (maxX - minX);
+            let desiredScaleY = canvas.height / (maxY - minY);
+            let targetScale = Math.min(desiredScaleX, desiredScaleY);
+            // Previne zoom‑in: nu măresc viewScale dacă targetScale este mai mare decât viewScale
+            let newScale = lerp(viewScale, targetScale, 0.05);
+            if(newScale > viewScale) {
+              newScale = viewScale;
+            }
+            viewScale = newScale;
+            let targetOffsetX = (canvas.width/(2*targetScale)) - ((minX+maxX)/2);
+            let targetOffsetY = (canvas.height/(2*targetScale)) - ((minY+maxY)/2);
+            viewOffsetX = lerp(viewOffsetX, targetOffsetX, 0.05);
+            viewOffsetY = lerp(viewOffsetY, targetOffsetY, 0.05);
+          }
+          
+          if (freefallY >= groundLevel) {
+            freefallY = groundLevel;
+            drawBlockFreefall(freefallX, freefallY);
+            let landingDistance = Math.sqrt((freefallX - rampEndX)**2 + (freefallY - rampEndY)**2) / scale;
+            document.getElementById('distance').innerText = landingDistance.toFixed(3);
+            clearInterval(simInterval);
+            document.getElementById('finalAcc').innerText = gravity.toFixed(3);
+            document.getElementById('finalVel').innerText = speed.toFixed(3);
+            document.getElementById('finalTime').innerText = t.toFixed(3);
+            document.getElementById('finalResults').classList.add('visible');
+          }
+        }
+        
+        ctx.restore();
+      }, dt * 1000);
+    }
+    
+    function resetSimulation() {
+      const canvas = document.getElementById('canvas');
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      document.getElementById('controls').classList.remove('fade-out');
+      document.getElementById('finalResults').classList.remove('visible');
+      document.getElementById('timeDisplay').innerText = "Timp: 0.00 s";
+      document.getElementById('velocityDisplay').innerText = "Viteza: 0.00 m/s";
+      document.getElementById('accelerationDisplay').innerText = "Accelerație: 0.00 m/s²";
+    }
+  </script>
+</body>
+</html>
